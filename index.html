@@ -221,6 +221,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
     <div class="nav-it" data-tab="sales"><span class="ic">♟</span>Performance Sales</div>
     <div class="nav-it" data-tab="objectives"><span class="ic">⚑</span>Objectifs</div>
     <div class="nav-it" data-tab="alerts"><span class="ic">⚠</span>Alertes<span class="bdg" id="alBdg">0</span></div>
+    <div class="nav-it" data-tab="forgotten"><span class="ic">🗑</span>Rotten +30j<span class="bdg" id="fgBdg" style="background:var(--bk2)">0</span></div>
     <div class="nav-it" data-tab="deals"><span class="ic">≣</span>Deals</div>
   </nav>
   <div class="sb-foot">
@@ -336,6 +337,20 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
       </div>
     </div>
 
+    <!-- ROTTEN +30J -->
+    <div class="tab" id="tab-forgotten">
+      <div class="card">
+        <div class="al-h">
+          <h3 style="margin:0">🗑 Rotten depuis +30 jours</h3><span class="ct" id="ctFg">0</span>
+          <span style="margin-left:auto;font-size:11px;color:var(--bk3)">deals ouverts avec plus de 30 j de retard — candidats au nettoyage (lost) dans Pipedrive</span>
+          <button class="btn btn-gh" id="btnFgCSV" style="margin-left:12px">⬇ CSV</button>
+        </div>
+        <div style="overflow-x:auto">
+        <table class="tbl"><thead><tr><th>Titre</th><th>Société</th><th>Sales</th><th>Étape</th><th>Source</th><th>Valeur</th><th>Inactif</th><th>Âge</th><th>Retard</th></tr></thead><tbody id="fgBody"></tbody></table>
+        </div>
+      </div>
+    </div>
+
     <!-- DEALS -->
     <div class="tab" id="tab-deals">
       <div class="card">
@@ -402,7 +417,8 @@ const PL={or:'#E87722',ok:'#2E7D52',ko:'#C0392B',wa:'#D4860A',bl:'#1A6FA8',pu:'#
 const SRC_PAL=['#E87722','#1A6FA8','#2E7D52','#6B2D8B','#C0392B','#D4860A','#1A5276','#8B4513','#2C8C84','#5C5C5B'];
 const PIPELINE_ID=1;
 const ML=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'];
-const TABS={overview:'Overview',pipeline:'Pipeline',sources:'Sources',sales:'Performance Sales',objectives:'Objectifs',alerts:'Alertes',deals:'Deals'};
+const TABS={overview:'Overview',pipeline:'Pipeline',sources:'Sources',sales:'Performance Sales',objectives:'Objectifs',alerts:'Alertes',forgotten:'Rotten +30j',deals:'Deals'};
+const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : onglet Rotten +30j */
 
 /* ════════ b. STATE ════════ */
 let TOKEN=null,raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
@@ -427,6 +443,16 @@ function lastAct(d){return D(d.update_time)||D(d.stage_change_time)||D(d.add_tim
 function idle(d){const l=lastAct(d);return l?Math.floor((Date.now()-l)/DAY):0}
 function isRot(d){if(d.status!=='open')return false;const s=STM.get(d.stage_id);return!!(s&&s.r&&idle(d)>s.r)}
 function etat(d){if(d.status!=='open')return d.status;if(isRot(d))return'rotten';if(idle(d)>21)return'stale';return'ok'}
+function overdue(d){ /* jours de retard max, toutes règles d'alerte confondues */
+  if(d.status!=='open')return-1;
+  const s=STM.get(d.stage_id);let o=-1e9;
+  if(s&&s.r)o=Math.max(o,idle(d)-s.r);
+  o=Math.max(o,idle(d)-21);
+  if(s&&s.o<=2)o=Math.max(o,age(d)-2);
+  o=Math.max(o,age(d)-60);
+  return o;
+}
+function forgotten(){return raw.filter(d=>pip(d)&&salOK(d)&&srcOK(d)&&d.status==='open'&&overdue(d)>ALERT_CAP)}
 function orgIdOf(d){const o=d.org_id;if(!o)return null;return typeof o==='object'?o.value:o}
 function orgName(d){const o=d.org_id;if(o&&typeof o==='object'&&o.name)return o.name;const org=orgMap.get(orgIdOf(d));return(org&&org.name)||'—'}
 function orig(d){
@@ -626,7 +652,7 @@ function mkChart(id,cfg){if(CH[id])CH[id].destroy();cfg.options=cfg.options||{};
 const noLeg={plugins:{legend:{display:false}}};
 const sc=(x,y)=>({scales:{x:Object.assign({grid:{color:'#EFECE7'}},x||{}),y:Object.assign({grid:{display:false}},y||{})}});
 
-function rAll(){rKPIs();rRibbon();rOverview();rPipe();rSources();rSales();rObjectives();rAlerts();rTbl();updSync()}
+function rAll(){rKPIs();rRibbon();rOverview();rPipe();rSources();rSales();rObjectives();rAlerts();rForgotten();rTbl();updSync()}
 
 function kpiSet(f,t){
   const ds=raw.filter(d=>pip(d)&&salOK(d)&&srcOK(d)&&stageOK(d)&&((!f&&!t)?true:inRange(d.add_time,f,t)));
@@ -765,7 +791,8 @@ function rObjectives(){
   }).join('')||'<div class="empty">Aucune donnée</div>';
 }
 function rAlerts(){
-  const open=raw.filter(d=>pip(d)&&salOK(d)&&srcOK(d)&&d.status==='open');
+  /* plafonné à ALERT_CAP j de retard : l'historique pourri vit dans l'onglet Rotten +30j */
+  const open=raw.filter(d=>pip(d)&&salOK(d)&&srcOK(d)&&d.status==='open'&&overdue(d)<=ALERT_CAP);
   const rot=open.filter(isRot);
   const sta=open.filter(d=>!isRot(d)&&idle(d)>21);
   const lead=open.filter(d=>{const s=STM.get(d.stage_id);return s&&s.o<=2&&age(d)>2});
@@ -787,6 +814,31 @@ function rAlerts(){
   fill('alOld','ctOld',old,d=>age(d)+' j ouverts');
   const tot=new Set([...rot,...lead].map(d=>d.id)).size;
   $('alBdg').textContent=tot;$('alBdg').style.display=tot?'inline-block':'none';
+}
+function rForgotten(){
+  const list=forgotten().sort((a,b)=>overdue(b)-overdue(a));
+  $('ctFg').textContent=list.length;$('ctFg').classList.toggle('z',!list.length);
+  $('fgBdg').textContent=list.length;$('fgBdg').style.display=list.length?'inline-block':'none';
+  $('fgBody').innerHTML=list.map(d=>{
+    const s=salOf(d),st=STM.get(d.stage_id),src=orig(d);
+    return'<tr class="clk" data-id="'+d.id+'">'+
+      '<td style="font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(d.title)+'</td>'+
+      '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(orgName(d))+'</td>'+
+      '<td><span class="own"><span class="av" style="background:'+(s?s.c:'#5C5C5B')+'">'+(s?s.i:'–')+'</span>'+esc(salName(d).split(' ')[0])+'</span></td>'+
+      '<td><span class="badge b-gy">'+(st?st.n:d.stage_id)+'</span></td>'+
+      '<td><span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span></td>'+
+      '<td class="num">'+fmtE(+d.value||0)+'</td>'+
+      '<td class="num">'+idle(d)+' j</td>'+
+      '<td class="num">'+age(d)+' j</td>'+
+      '<td class="num" style="color:var(--ko);font-weight:700">+'+overdue(d)+' j</td></tr>';
+  }).join('')||'<tr><td colspan="9"><div class="empty">Aucun deal oublié — pipeline propre ✔</div></td></tr>';
+  $('fgBody').querySelectorAll('tr.clk').forEach(tr=>tr.onclick=()=>{const d=raw.find(x=>x.id==tr.dataset.id);if(d)openPanel(d)});
+}
+function exportFgCSV(){
+  const rows=[['ID','Titre','Société','Sales','Étape','Source','Valeur','Inactif (j)','Âge (j)','Retard (j)','Créé le']];
+  forgotten().sort((a,b)=>overdue(b)-overdue(a)).forEach(d=>rows.push([d.id,d.title,orgName(d),salName(d),(STM.get(d.stage_id)||{}).n||d.stage_id,orig(d),d.value||0,idle(d),age(d),overdue(d),String(d.add_time||'').slice(0,10)]));
+  const csv='﻿'+rows.map(r=>r.map(c=>'"'+String(c==null?'':c).replace(/"/g,'""')+'"').join(';')).join('\n');
+  dl(new Blob([csv],{type:'text/csv;charset=utf-8'}),'auctelia_rotten_30j.csv');
 }
 
 /* ===== Table Deals ===== */
@@ -904,6 +956,7 @@ $('selSrc').onchange=()=>{srcFilter=$('selSrc').value;tPage=1;rAll()};
 $('pgPrev').onclick=()=>{if(tPage>1){tPage--;rTbl()}};
 $('pgNext').onclick=()=>{tPage++;rTbl()};
 $('btnCSV').onclick=exportCSV;
+$('btnFgCSV').onclick=exportFgCSV;
 $('btnJSON').onclick=exportJSON;
 $('objIn').addEventListener('input',rObjectives);
 $('btnConnect').onclick=openModal;

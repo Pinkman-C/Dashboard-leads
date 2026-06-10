@@ -20,6 +20,7 @@ Un **mode démo** (données fictives reproductibles) est disponible dans la moda
 - **Rafraîchissement** en arrière-plan (bouton topbar) + badge « Dernière sync il y a X min » dans la sidebar.
 - **Exports** : CSV (séparateur `;`, BOM UTF-8 pour Excel) incluant la source réelle, + export JSON.
 - **Objectif mensuel éditable** directement dans le tab Objectifs (recalcule historique, projection et grille par commercial).
+- **Alertes plafonnées à 30 j de retard** : les alertes ne montrent que l'actionnable récent ; tout deal ouvert dépassant son seuil de plus de 30 jours bascule dans l'onglet dédié **Rotten +30j** (liste complète triée par retard, export CSV) pour le nettoyage côté Pipedrive.
 
 ## Périmètre fonctionnel (hérité v17)
 
