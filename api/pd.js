@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const ALLOWED = [
   /^\/ping$/,
   /^\/deals$/,
+  /^\/leads$/,
+  /^\/users$/,
   /^\/organizations$/,
   /^\/organizations\/\d+$/,
   /^\/organizationFields$/,

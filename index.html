@@ -467,16 +467,22 @@ function overdue(d){ /* jours de retard max, toutes règles d'alerte confondues 
 function forgotten(){return raw.filter(d=>pip(d)&&salOK(d)&&srcOK(d)&&d.status==='open'&&overdue(d)>ALERT_CAP)}
 function orgIdOf(d){const o=d.org_id;if(!o)return null;return typeof o==='object'?o.value:o}
 function orgName(d){const o=d.org_id;if(o&&typeof o==='object'&&o.name)return o.name;const org=orgMap.get(orgIdOf(d));return(org&&org.name)||'—'}
+const SRC_BRAND={'meta':'META','google ads':'Google Ads','landing page':'Landing page','appel entrant':'Appel entrant','référent interne':'Référent interne','organique':'Organique','organic':'Organique'};
+function canonSrc(raw){ /* fusion insensible à la casse : « meta », « META », « Meta » = une seule source */
+  const k=String(raw==null?'':raw).trim().toLowerCase();
+  if(!k)return'Inconnu';
+  return SRC_BRAND[k]||(k.charAt(0).toUpperCase()+k.slice(1));
+}
 function orig(d){
   const oid=orgIdOf(d);
   if(oid){const org=orgMap.get(oid);
     if(org&&ORIG_FIELD_KEY&&org[ORIG_FIELD_KEY]!=null&&org[ORIG_FIELD_KEY]!==''){
       let v=org[ORIG_FIELD_KEY];
       if(ORIG_OPTS&&ORIG_OPTS[v]!==undefined)v=ORIG_OPTS[v];
-      return String(v).trim();
+      return canonSrc(v);
     }}
   const c={1:'Organic',2:'Google Ads',3:'Email',4:'Meta',5:'Référent'};
-  return d.channel?(c[d.channel]||String(d.channel)):(d.origin||'Inconnu');
+  return canonSrc(d.channel?(c[d.channel]||String(d.channel)):(d.origin||'Inconnu'));
 }
 function srcColor(s){if(!srcColorMap.has(s))srcColorMap.set(s,SRC_PAL[(srcColorMap.size-1)%SRC_PAL.length]);return srcColorMap.get(s)}
 function pip(d){return!d.pipeline_id||d.pipeline_id===PIPELINE_ID}
@@ -534,6 +540,30 @@ async function fetchAll(path,params={},onPage){
   return out;
 }
 async function fetchD(status,onPage){return fetchAll('/deals',{status},onPage)}
+let userMap=new Map();
+async function fetchUsers(){try{const j=await pdG('/users');(j.data||[]).forEach(u=>userMap.set(u.id,u.name))}catch(e){}}
+async function fetchLeads(){ /* Leads Inbox Pipedrive (non convertis en deal) */
+  let start=0,out=[];
+  for(;;){
+    const j=await pdG('/leads',{limit:500,start,archived_status:'not_archived'});
+    const d=j.data||[];out=out.concat(d);
+    if(d.length<500)break;start+=500;
+  }
+  return out;
+}
+function leadToDeal(l){ /* un lead inbox = pseudo-deal à l'étape Lead */
+  return{
+    id:'L'+l.id,leadId:l.id,isLead:true,
+    title:l.title||'Lead sans titre',
+    org_id:l.organization_id?{value:l.organization_id}:null,
+    person_id:l.person_id,
+    owner_name:userMap.get(l.owner_id)||'',
+    pipeline_id:PIPELINE_ID,stage_id:54,status:'open',
+    value:(l.value&&l.value.amount)||0,
+    add_time:l.add_time,update_time:l.update_time,
+    stage_change_time:null,won_time:null,lost_time:null
+  };
+}
 async function fetchOrgFields(){
   const fields=await fetchAll('/organizationFields');
   const f=fields.find(x=>String(x.name||'').trim().toLowerCase()==='origine')
@@ -573,10 +603,13 @@ async function connect(silent){
       sessionStorage.setItem('dashKey',KEY);
     }
     if(!silent)prog('Recherche du champ « Origine »…',5);
-    await fetchOrgFields().catch(()=>{});
-    if(!silent)prog('Deals en cours de chargement…',15);
-    const deals=await fetchD(status,n=>{if(!silent)prog('Deals chargés… ('+n+')',15+Math.min(40,n/50))});
-    raw=deals;demo=false;orgMap=new Map();
+    await Promise.all([fetchOrgFields().catch(()=>{}),fetchUsers()]);
+    if(!silent)prog('Deals en cours de chargement…',12);
+    const deals=await fetchD(status,n=>{if(!silent)prog('Deals chargés… ('+n+')',12+Math.min(35,n/50))});
+    if(!silent)prog('Leads inbox…',50);
+    let leads=[];
+    try{leads=await fetchLeads()}catch(e){console.warn('Leads inbox indisponibles',e)}
+    raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();
     lastSync=new Date();setConn(true);
     buildSrcOpts();rAll(); /* affichage immédiat, orgs non bloquantes */
     if(!silent)prog('Organisations en cours…',58);
@@ -904,7 +937,7 @@ function rTbl(){
       '<td style="font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(d.title)+'</td>'+
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(orgName(d))+'</td>'+
       '<td><span class="own"><span class="av" style="background:'+(s?s.c:'#5C5C5B')+'">'+(s?s.i:'–')+'</span>'+esc(salName(d).split(' ')[0])+'</span></td>'+
-      '<td><span class="badge b-gy">'+(st?st.n:d.stage_id)+'</span></td>'+
+      '<td><span class="badge '+(d.isLead?'b-bl':'b-gy')+'">'+(d.isLead?'📥 Inbox':(st?st.n:d.stage_id))+'</span></td>'+
       '<td><span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span></td>'+
       '<td><span class="badge '+sb+'">'+d.status+'</span></td>'+
       '<td class="num">'+fmtE(+d.value||0)+'</td>'+
@@ -936,7 +969,7 @@ function openPanel(d){
     ['Société',esc(orgName(d))],
     ['Contact',esc(d.person_name||(d.person_id&&d.person_id.name)||'—')],
     ['Owner',esc(salName(d))],
-    ['Étape',st?st.n:d.stage_id],
+    ['Étape',d.isLead?'📥 Leads Inbox':(st?st.n:d.stage_id)],
     ['Statut','<span class="badge '+(d.status==='won'?'b-ok':d.status==='lost'?'b-ko':'b-bl')+'">'+d.status+'</span>'],
     ['Valeur','<span class="mono" style="font-weight:700">'+fmtE(+d.value||0)+'</span>'],
     ['Âge',age(d)+' j'],
@@ -954,7 +987,7 @@ async function loadDealNotes(d){
   if(!live()){box.innerHTML='<div class="empty" style="padding:14px">Notes disponibles une fois connecté à Pipedrive.</div>';return}
   box.innerHTML='<div class="empty" style="padding:14px">Chargement…</div>';
   try{
-    const j=await pdG('/notes',{deal_id:d.id,limit:20,sort:'add_time DESC'});
+    const j=await pdG('/notes',Object.assign({limit:20,sort:'add_time DESC'},d.isLead?{lead_id:d.leadId}:{deal_id:d.id}));
     const ns=j.data||[];
     if(curDeal!==d)return;
     box.innerHTML=ns.length?ns.map(n=>'<div class="note">'+esc(stripHtml(n.content))+'<div class="nd">'+String(n.add_time||'').slice(0,16)+'</div></div>').join(''):'<div class="empty" style="padding:14px">Aucune note.</div>';
@@ -1007,7 +1040,7 @@ if(location.protocol==='file:'){ /* en local : pas de proxy, token uniquement */
 }
 $('pClose').onclick=closePanel;
 $('panelOv').onclick=closePanel;
-$('pOpen').onclick=()=>{if(curDeal)window.open('https://app.pipedrive.com/deal/'+curDeal.id,'_blank')};
+$('pOpen').onclick=()=>{if(!curDeal)return;window.open(curDeal.isLead?'https://app.pipedrive.com/leads/inbox/'+curDeal.leadId:'https://app.pipedrive.com/deal/'+curDeal.id,'_blank')};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePanel();closeModal()}});
 setInterval(updSync,30000);
 
