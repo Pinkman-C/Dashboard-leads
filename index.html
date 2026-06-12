@@ -437,6 +437,7 @@ const live=()=>MODE!==null;
 let srcFilter='',salSel=new Set(),stageSel=null;
 let perKey='all',perFrom=null,perTo=null,cmpOn=false;
 let curTab='overview',lastSync=null,demo=false,curDeal=null;
+let LEADS_INFO={n:0,err:null};
 let tPage=1,tSort={c:'age',d:1};
 const CH={};
 const srcColorMap=new Map([['Inconnu','#8C8C8B']]);
@@ -607,8 +608,9 @@ async function connect(silent){
     if(!silent)prog('Deals en cours de chargement…',12);
     const deals=await fetchD(status,n=>{if(!silent)prog('Deals chargés… ('+n+')',12+Math.min(35,n/50))});
     if(!silent)prog('Leads inbox…',50);
-    let leads=[];
-    try{leads=await fetchLeads()}catch(e){console.warn('Leads inbox indisponibles',e)}
+    let leads=[];LEADS_INFO={n:0,err:null};
+    try{leads=await fetchLeads();LEADS_INFO.n=leads.length}
+    catch(e){LEADS_INFO.err=e.message;console.warn('Leads inbox indisponibles',e)}
     raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();
     lastSync=new Date();setConn(true);
     buildSrcOpts();rAll(); /* affichage immédiat, orgs non bloquantes */
@@ -674,7 +676,10 @@ function setSpin(on){$('btnRefresh').classList.toggle('spin',on)}
 function updSync(){
   if(!lastSync){$('syncBadge').textContent='';return}
   const m=Math.floor((Date.now()-lastSync)/6e4);
-  $('syncBadge').textContent='Dernière sync il y a '+(m<1?"moins d'1 min":m+' min');
+  let h='Dernière sync il y a '+(m<1?"moins d'1 min":m+' min');
+  if(!demo&&raw.length)h+='<br>'+(raw.length-LEADS_INFO.n)+' deals · '+LEADS_INFO.n+' leads inbox';
+  if(LEADS_INFO.err)h+='<br><span style="color:#FF8A73">⚠ Inbox : '+esc(LEADS_INFO.err)+'</span>';
+  $('syncBadge').innerHTML=h;
 }
 function buildSales(){
   const bar=$('salesBar');
