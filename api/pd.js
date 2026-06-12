@@ -14,6 +14,7 @@ const ALLOWED = [
   /^\/organizations\/\d+$/,
   /^\/organizationFields$/,
   /^\/dealFields$/,
+  /^\/personFields$/,
   /^\/persons$/,
   /^\/notes$/
 ];

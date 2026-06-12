@@ -440,6 +440,7 @@ const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : ongle
 let MODE=null,KEY=null,TOKEN=null; /* MODE: 'proxy' (mot de passe équipe) | 'token' (direct) | null */
 let raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
 let DEAL_ORIG_KEY=null,DEAL_ORIG_OPTS=null;
+let personMap=new Map(),PERSON_ORIG_KEY=null,PERSON_ORIG_OPTS=null;
 const live=()=>MODE!==null;
 let srcFilter='',salSel=new Set(),stageSel=null;
 let perKey='all',perFrom=null,perTo=null,cmpOn=false;
@@ -495,6 +496,13 @@ function orig(d){
     if(DEAL_ORIG_OPTS&&DEAL_ORIG_OPTS[v]!==undefined)v=DEAL_ORIG_OPTS[v];
     return canonSrc(v);
   }
+  const pid=personIdOf(d);
+  if(pid){const p=personMap.get(pid);
+    if(p&&PERSON_ORIG_KEY&&p[PERSON_ORIG_KEY]!=null&&p[PERSON_ORIG_KEY]!==''){
+      let v=p[PERSON_ORIG_KEY];
+      if(PERSON_ORIG_OPTS&&PERSON_ORIG_OPTS[v]!==undefined)v=PERSON_ORIG_OPTS[v];
+      return canonSrc(v);
+    }}
   const c={1:'Organic',2:'Google Ads',3:'Email',4:'Meta',5:'Référent'};
   if(d.channel)return canonSrc(c[d.channel]||String(d.channel));
   /* origines techniques Pipedrive = org sans champ Origine : à compléter côté CRM */
@@ -606,6 +614,12 @@ async function fetchDealFields(){ /* les leads héritent des champs custom des d
     if(Array.isArray(f.options)&&f.options.length){DEAL_ORIG_OPTS={};f.options.forEach(o=>DEAL_ORIG_OPTS[o.id]=o.label)}
   }
 }
+async function fetchPersonFields(){
+  const f=findOrigField(await fetchAll('/personFields'));
+  if(f){PERSON_ORIG_KEY=f.key;
+    if(Array.isArray(f.options)&&f.options.length){PERSON_ORIG_OPTS={};f.options.forEach(o=>PERSON_ORIG_OPTS[o.id]=o.label)}
+  }
+}
 async function fetchOrganisations(ids,onProg){
   const need=new Set(ids);
   if(!need.size)return;
@@ -636,19 +650,23 @@ async function connect(silent){
       sessionStorage.setItem('dashKey',KEY);
     }
     if(!silent)prog('Recherche du champ « Origine »…',5);
-    await Promise.all([fetchOrgFields().catch(()=>{}),fetchDealFields().catch(()=>{}),fetchUsers()]);
+    await Promise.all([fetchOrgFields().catch(()=>{}),fetchDealFields().catch(()=>{}),fetchPersonFields().catch(()=>{}),fetchUsers()]);
     if(!silent)prog('Deals en cours de chargement…',12);
     const deals=await fetchD(status,n=>{if(!silent)prog('Deals chargés… ('+n+')',12+Math.min(35,n/50))});
     if(!silent)prog('Leads inbox…',50);
     let leads=[];LEADS_INFO={n:0,err:null};
     try{leads=await fetchLeads();LEADS_INFO.n=leads.length}
     catch(e){LEADS_INFO.err=e.message;console.warn('Leads inbox indisponibles',e)}
-    raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();personsLoaded=false;
+    raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();personMap=new Map();personsLoaded=false;
     lastSync=new Date();setConn(true);
     buildSrcOpts();rAll(); /* affichage immédiat, orgs non bloquantes */
     if(!silent)prog('Organisations en cours…',58);
     const ids=[...new Set(raw.map(orgIdOf).filter(Boolean))];
-    await fetchOrganisations(ids,(x,y)=>{if(!silent)prog('Organisations en cours ('+x+'/'+y+')…',58+Math.round(x/Math.max(1,y)*40))});
+    await fetchOrganisations(ids,(x,y)=>{if(!silent)prog('Organisations en cours ('+x+'/'+y+')…',58+Math.round(x/Math.max(1,y)*25))});
+    buildSrcOpts();rAll();
+    if(!silent)prog('Contacts en cours…',84);
+    try{await fetchPersons(n=>{if(!silent)prog('Contacts en cours ('+n+')…',84+Math.min(14,Math.round(n/600)))})}
+    catch(e){console.warn('Contacts indisponibles',e)}
     buildSrcOpts();rAll();
     lastSync=new Date();updSync();
     if(!silent){prog('Terminé ✔',100);setTimeout(closeModal,500)}
@@ -1003,9 +1021,10 @@ function exportJSON(){
 let personsLoaded=false,emailToPersons=new Map();
 function personIdOf(d){const p=d.person_id;if(p==null)return null;return typeof p==='object'?(p.value!=null?p.value:p.id):p}
 async function fetchPersons(onProg){
-  emailToPersons=new Map();
+  emailToPersons=new Map();personMap=new Map();
   const ps=await fetchAll('/persons',{},onProg);
   ps.forEach(p=>{
+    personMap.set(p.id,p);
     const ems=[];
     if(Array.isArray(p.email))p.email.forEach(e=>{if(e&&e.value)ems.push(e.value)});
     else if(p.email)ems.push(String(p.email));
