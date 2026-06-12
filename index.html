@@ -483,9 +483,17 @@ function orig(d){
       return canonSrc(v);
     }}
   const c={1:'Organic',2:'Google Ads',3:'Email',4:'Meta',5:'Référent'};
-  return canonSrc(d.channel?(c[d.channel]||String(d.channel)):(d.origin||'Inconnu'));
+  if(d.channel)return canonSrc(c[d.channel]||String(d.channel));
+  /* origines techniques Pipedrive = org sans champ Origine : à compléter côté CRM */
+  const OL={manuallycreated:'Origine manquante (manuel)',api:'Origine manquante (API)',import:'Origine manquante (import)',webforms:'Origine manquante (web form)'};
+  if(d.origin)return OL[String(d.origin).toLowerCase()]||canonSrc(d.origin);
+  return'Inconnu';
 }
-function srcColor(s){if(!srcColorMap.has(s))srcColorMap.set(s,SRC_PAL[(srcColorMap.size-1)%SRC_PAL.length]);return srcColorMap.get(s)}
+function srcColor(s){
+  if(s==='Inconnu'||s.indexOf('Origine manquante')===0)return'#8C8C8B';
+  if(!srcColorMap.has(s))srcColorMap.set(s,SRC_PAL[(srcColorMap.size-1)%SRC_PAL.length]);
+  return srcColorMap.get(s);
+}
 function pip(d){return!d.pipeline_id||d.pipeline_id===PIPELINE_ID}
 function salOf(d){const on=(d.owner_name||(d.user_id&&d.user_id.name)||'').toLowerCase();if(!on)return null;return SALES.find(s=>on.includes(s.n.split(' ')[0].toLowerCase()))||null}
 function salName(d){const s=salOf(d);return s?s.n:(d.owner_name||(d.user_id&&d.user_id.name)||'—')}
@@ -784,9 +792,10 @@ function srcStats(){
   });
   return[...m.entries()].map(([s,o])=>Object.assign({s,conv:pct(o.won,o.won+o.lost),avgAge:o.n?Math.round(o.ageT/o.n):0},o)).sort((a,b)=>b.n-a.n);
 }
+function goSrc(s){srcFilter=s;$('selSrc').value=s;tPage=1;switchTab('deals');rAll()}
 function rSources(){
   const st=srcStats();
-  $('srcCards').innerHTML=st.slice(0,8).map(x=>'<div class="kpi"><div class="t"><span class="src-b" style="background:'+srcColor(x.s)+'">'+esc(x.s)+'</span></div><div class="v">'+x.n+'</div><div class="s">'+x.conv+'% conv · '+fmtE(x.openV)+' pipeline</div></div>').join('')||'<div class="empty">Aucune donnée</div>';
+  $('srcCards').innerHTML=st.slice(0,8).map(x=>'<div class="kpi clk-src" data-src="'+esc(x.s)+'" style="cursor:pointer"><div class="t"><span class="src-b" style="background:'+srcColor(x.s)+'">'+esc(x.s)+'</span></div><div class="v">'+x.n+'</div><div class="s">'+x.conv+'% conv · '+fmtE(x.openV)+' pipeline</div></div>').join('')||'<div class="empty">Aucune donnée</div>';
   mkChart('chSrcStack',{type:'bar',data:{labels:st.map(x=>x.s),datasets:[
     {label:'Open',data:st.map(x=>x.open),backgroundColor:PL.bl,borderRadius:4},
     {label:'Won',data:st.map(x=>x.won),backgroundColor:PL.ok,borderRadius:4},
@@ -794,7 +803,8 @@ function rSources(){
   ]},options:{plugins:{legend:{position:'top'}},scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,beginAtZero:true,grid:{color:'#EFECE7'}}}}});
   const sorted=[...st].sort((a,b)=>b.conv-a.conv);
   mkChart('chSrcConv',{type:'bar',data:{labels:sorted.map(x=>x.s),datasets:[{data:sorted.map(x=>x.conv),backgroundColor:sorted.map(x=>srcColor(x.s)),borderRadius:5}]},options:Object.assign({indexAxis:'y'},noLeg,{scales:{x:{max:100,grid:{color:'#EFECE7'},ticks:{callback:v=>v+'%'}},y:{grid:{display:false}}}})});
-  $('srcTbl').innerHTML=st.map(x=>'<tr><td><span class="src-b" style="background:'+srcColor(x.s)+'">'+esc(x.s)+'</span></td><td class="num">'+x.n+'</td><td class="num" style="color:var(--ok)">'+x.won+'</td><td class="num" style="color:var(--ko)">'+x.lost+'</td><td class="num">'+x.open+'</td><td class="num">'+x.conv+'%</td><td class="num">'+fmtE(x.openV)+'</td><td class="num">'+x.avgAge+' j</td></tr>').join('')||'<tr><td colspan="8"><div class="empty">Aucune donnée</div></td></tr>';
+  $('srcTbl').innerHTML=st.map(x=>'<tr class="clk clk-src" data-src="'+esc(x.s)+'"><td><span class="src-b" style="background:'+srcColor(x.s)+'">'+esc(x.s)+'</span></td><td class="num">'+x.n+'</td><td class="num" style="color:var(--ok)">'+x.won+'</td><td class="num" style="color:var(--ko)">'+x.lost+'</td><td class="num">'+x.open+'</td><td class="num">'+x.conv+'%</td><td class="num">'+fmtE(x.openV)+'</td><td class="num">'+x.avgAge+' j</td></tr>').join('')||'<tr><td colspan="8"><div class="empty">Aucune donnée</div></td></tr>';
+  document.querySelectorAll('.clk-src').forEach(el=>el.onclick=()=>goSrc(el.dataset.src));
 }
 function rSales(){
   const ds=pDeals(),open=ds.filter(d=>d.status==='open');
