@@ -364,7 +364,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
     <div class="tab" id="tab-deals">
       <div class="card">
         <div class="tfilters">
-          <input type="text" id="fS" placeholder="🔍 Rechercher deal / société…">
+          <input type="text" id="fS" placeholder="🔍 Rechercher deal / société / contact / email…">
           <select id="fStage"><option value="">Toutes étapes</option></select>
           <select id="fStatus"><option value="">Tous statuts</option><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select>
           <select id="fEtat"><option value="">Tous états</option><option value="ok">OK</option><option value="stale">Stale</option><option value="rotten">Rotten</option></select>
@@ -438,7 +438,7 @@ const TABS={overview:'Overview',pipeline:'Pipeline',sources:'Sources',sales:'Per
 const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : onglet Rotten +30j */
 
 /* ════════ b. STATE ════════ */
-const APP_V='v19';
+const APP_V='v20';
 let MODE=null,KEY=null,TOKEN=null; /* MODE: 'proxy' (mot de passe équipe) | 'token' (direct) | null */
 let raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
 let DEAL_ORIG_KEY=null,DEAL_ORIG_OPTS=null;
@@ -575,26 +575,28 @@ async function fetchAll(path,params={},onPage){
 async function fetchD(status,onPage){return fetchAll('/deals',{status},onPage)}
 let userMap=new Map();
 async function fetchUsers(){try{const j=await pdG('/users');(j.data||[]).forEach(u=>userMap.set(u.id,u.name))}catch(e){}}
-async function fetchLeads(){ /* Leads Inbox Pipedrive (non convertis en deal) */
+async function fetchLeads(){ /* Leads Inbox Pipedrive, archivés inclus : un lead archivé sans conversion doit rester compté dans sa source */
   let start=0,out=[];
   for(;;){
-    const j=await pdG('/leads',{limit:500,start,archived_status:'not_archived'});
+    const j=await pdG('/leads',{limit:500,start,archived_status:'all'});
     const d=j.data||[];out=out.concat(d);
     if(d.length<500)break;start+=500;
   }
   return out;
 }
-function leadToDeal(l){ /* un lead inbox = pseudo-deal à l'étape Lead */
+function leadToDeal(l){ /* un lead inbox = pseudo-deal à l'étape Lead ; archivé = traité sans suite → lost */
+  const arch=!!l.is_archived;
   const out={
-    id:'L'+l.id,leadId:l.id,isLead:true,
+    id:'L'+l.id,leadId:l.id,isLead:true,isArchived:arch,
     title:l.title||'Lead sans titre',
     org_id:l.organization_id?{value:l.organization_id}:null,
     person_id:l.person_id,
     owner_name:userMap.get(l.owner_id)||'',
-    pipeline_id:PIPELINE_ID,stage_id:54,status:'open',
+    pipeline_id:PIPELINE_ID,stage_id:54,status:arch?'lost':'open',
     value:(l.value&&l.value.amount)||0,
     add_time:l.add_time,update_time:l.update_time,
-    stage_change_time:null,won_time:null,lost_time:null,
+    stage_change_time:null,won_time:null,
+    lost_time:arch?(l.archive_time||l.update_time):null,
     channel:l.channel||null,origin:l.origin||l.source_name||null
   };
   if(DEAL_ORIG_KEY&&l[DEAL_ORIG_KEY]!=null)out[DEAL_ORIG_KEY]=l[DEAL_ORIG_KEY];
@@ -658,7 +660,7 @@ async function connect(silent){
     const deals=await fetchD(status,n=>{if(!silent)prog('Deals chargés… ('+n+')',12+Math.min(35,n/50))});
     if(!silent)prog('Leads inbox…',50);
     let leads=[];LEADS_INFO={n:0,err:null};
-    try{leads=await fetchLeads();LEADS_INFO.n=leads.length}
+    try{leads=await fetchLeads();LEADS_INFO.n=leads.length;LEADS_INFO.arch=leads.filter(l=>l.is_archived).length}
     catch(e){LEADS_INFO.err=e.message;console.warn('Leads inbox indisponibles',e)}
     raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();personMap=new Map();personsLoaded=false;
     lastSync=new Date();setConn(true);
@@ -730,7 +732,7 @@ function updSync(){
   if(!lastSync){$('syncBadge').textContent='';return}
   const m=Math.floor((Date.now()-lastSync)/6e4);
   let h='Dernière sync il y a '+(m<1?"moins d'1 min":m+' min');
-  if(!demo&&raw.length)h+='<br>'+(raw.length-LEADS_INFO.n)+' deals · '+LEADS_INFO.n+' leads inbox';
+  if(!demo&&raw.length)h+='<br>'+(raw.length-LEADS_INFO.n)+' deals · '+LEADS_INFO.n+' leads'+(LEADS_INFO.arch?' (dont '+LEADS_INFO.arch+' archivés)':'');
   if(LEADS_INFO.err)h+='<br><span style="color:#FF8A73">⚠ Inbox : '+esc(LEADS_INFO.err)+'</span>';
   $('syncBadge').innerHTML=h;
 }
@@ -983,10 +985,17 @@ function colVal(d,c){switch(c){
   case'age':return age(d);
   case'etat':return etat(d);
 }}
+function hay(d){ /* texte cherchable : titre + société + contact + emails + owner */
+  const p=personMap.get(personIdOf(d));
+  return[d.title||'',orgName(d),d.person_name||'',(d.person_id&&d.person_id.name)||'',
+    p?(p.name||''):'',
+    p&&Array.isArray(p.email)?p.email.map(e=>(e&&e.value)||'').join(' '):(p&&p.primary_email)||'',
+    salName(d)].join(' ').toLowerCase();
+}
 function tblDeals(){
   const q=$('fS').value.trim().toLowerCase();
   return pDeals().filter(d=>{
-    if(q&&!((d.title||'').toLowerCase().includes(q)||orgName(d).toLowerCase().includes(q)))return false;
+    if(q&&!hay(d).includes(q))return false;
     if($('fStage').value&&d.stage_id!=+$('fStage').value)return false;
     if($('fStatus').value&&d.status!==$('fStatus').value)return false;
     if($('fEtat').value&&etat(d)!==$('fEtat').value)return false;
@@ -1006,7 +1015,7 @@ function rTbl(){
       '<td style="font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(d.title)+'</td>'+
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(orgName(d))+'</td>'+
       '<td><span class="own"><span class="av" style="background:'+(s?s.c:'#5C5C5B')+'">'+(s?s.i:'–')+'</span>'+esc(salName(d).split(' ')[0])+'</span></td>'+
-      '<td><span class="badge '+(d.isLead?'b-bl':'b-gy')+'">'+(d.isLead?'📥 Inbox':(st?st.n:d.stage_id))+'</span></td>'+
+      '<td><span class="badge '+(d.isLead?(d.isArchived?'b-gy':'b-bl'):'b-gy')+'">'+(d.isLead?(d.isArchived?'📥 Archivé':'📥 Inbox'):(st?st.n:d.stage_id))+'</span></td>'+
       '<td><span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span></td>'+
       '<td><span class="badge '+sb+'">'+d.status+'</span></td>'+
       '<td class="num">'+fmtE(+d.value||0)+'</td>'+
@@ -1079,7 +1088,7 @@ async function runRecon(){
         '<td><span class="badge '+BAD[r.st][0]+'">'+BAD[r.st][1]+'</span></td>'+
         '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(d?esc(d.title):'—')+'</td>'+
         '<td>'+(d?'<span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span>':'—')+'</td>'+
-        '<td>'+(d?(d.isLead?'📥 Inbox':((STM.get(d.stage_id)||{}).n||d.stage_id)):'—')+'</td>'+
+        '<td>'+(d?(d.isLead?(d.isArchived?'📥 Archivé':'📥 Inbox'):((STM.get(d.stage_id)||{}).n||d.stage_id)):'—')+'</td>'+
         '<td class="num">'+(d?String(d.add_time||'').slice(0,10):'—')+'</td></tr>';
     }).join('')+'</tbody></table></div>';
   out.querySelectorAll('tr.clk').forEach(tr=>tr.onclick=()=>{const d=raw.find(x=>x.id==tr.dataset.id);if(d)openPanel(d)});
@@ -1094,7 +1103,7 @@ function openPanel(d){
     ['Société',esc(orgName(d))],
     ['Contact',esc(d.person_name||(d.person_id&&d.person_id.name)||'—')],
     ['Owner',esc(salName(d))],
-    ['Étape',d.isLead?'📥 Leads Inbox':(st?st.n:d.stage_id)],
+    ['Étape',d.isLead?(d.isArchived?'📥 Lead archivé (traité sans conversion)':'📥 Leads Inbox'):(st?st.n:d.stage_id)],
     ['Statut','<span class="badge '+(d.status==='won'?'b-ok':d.status==='lost'?'b-ko':'b-bl')+'">'+d.status+'</span>'],
     ['Valeur','<span class="mono" style="font-weight:700">'+fmtE(+d.value||0)+'</span>'],
     ['Âge',age(d)+' j'],
