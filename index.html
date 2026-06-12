@@ -300,6 +300,12 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
       <div class="card"><h3>Récapitulatif sources</h3>
         <table class="tbl"><thead><tr><th>Source</th><th>Leads</th><th>WON</th><th>Lost</th><th>Open</th><th>Conv %</th><th>Valeur pipeline</th><th>Âge moyen</th></tr></thead><tbody id="srcTbl"></tbody></table>
       </div>
+      <div class="card"><h3>Réconciliation Google Sheet → Pipedrive</h3>
+        <div style="font-size:12px;color:var(--bk2);margin-bottom:9px">Colle des lignes de ton sheet (ou une liste d'emails) : pour chaque contact, je vérifie s'il existe dans Pipedrive — deal, lead inbox ou introuvable — et quelle source lui a été attribuée.</div>
+        <textarea id="reconIn" rows="6" placeholder="Colle ici les lignes du sheet…" style="width:100%;font-family:'JetBrains Mono',monospace;font-size:11.5px;padding:10px 12px;border:1.5px solid var(--g2);border-radius:8px;outline:none;resize:vertical"></textarea>
+        <div style="margin-top:9px"><button class="btn btn-or" id="reconGo">Analyser</button></div>
+        <div id="reconOut" style="margin-top:13px"></div>
+      </div>
     </div>
 
     <!-- PERFORMANCE SALES -->
@@ -619,7 +625,7 @@ async function connect(silent){
     let leads=[];LEADS_INFO={n:0,err:null};
     try{leads=await fetchLeads();LEADS_INFO.n=leads.length}
     catch(e){LEADS_INFO.err=e.message;console.warn('Leads inbox indisponibles',e)}
-    raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();
+    raw=deals.concat(leads.map(leadToDeal));demo=false;orgMap=new Map();personsLoaded=false;
     lastSync=new Date();setConn(true);
     buildSrcOpts();rAll(); /* affichage immédiat, orgs non bloquantes */
     if(!silent)prog('Organisations en cours…',58);
@@ -975,6 +981,61 @@ function exportJSON(){
   dl(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),'auctelia_deals.json');
 }
 
+/* ════════ RÉCONCILIATION SHEET → PIPEDRIVE ════════ */
+let personsLoaded=false,emailToPersons=new Map();
+function personIdOf(d){const p=d.person_id;if(p==null)return null;return typeof p==='object'?(p.value!=null?p.value:p.id):p}
+async function fetchPersons(onProg){
+  emailToPersons=new Map();
+  const ps=await fetchAll('/persons',{},onProg);
+  ps.forEach(p=>{
+    const ems=[];
+    if(Array.isArray(p.email))p.email.forEach(e=>{if(e&&e.value)ems.push(e.value)});
+    else if(p.email)ems.push(String(p.email));
+    if(p.primary_email)ems.push(p.primary_email);
+    ems.forEach(e=>{const k=String(e).trim().toLowerCase();if(!k)return;
+      if(!emailToPersons.has(k))emailToPersons.set(k,new Set());
+      emailToPersons.get(k).add(p.id)});
+  });
+  personsLoaded=true;
+}
+async function runRecon(){
+  const out=$('reconOut');
+  if(!live()){out.innerHTML='<div class="empty">Connecte-toi d\'abord (mot de passe équipe) pour interroger Pipedrive.</div>';return}
+  const emails=[...new Set((($('reconIn').value).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)||[]).map(e=>e.toLowerCase()))];
+  if(!emails.length){out.innerHTML='<div class="empty">Aucune adresse email détectée dans le texte collé.</div>';return}
+  try{
+    if(!personsLoaded){out.innerHTML='<div class="empty">Chargement des contacts Pipedrive…</div>';await fetchPersons(n=>{out.innerHTML='<div class="empty">Contacts chargés… ('+n+')</div>'})}
+  }catch(e){out.innerHTML='<div class="empty" style="color:var(--ko)">Erreur contacts : '+esc(e.message)+'</div>';return}
+  const byPerson=new Map();
+  raw.forEach(d=>{const pid=personIdOf(d);if(pid==null)return;if(!byPerson.has(pid))byPerson.set(pid,[]);byPerson.get(pid).push(d)});
+  const rows=emails.map(e=>{
+    const pids=emailToPersons.get(e);
+    if(!pids)return{e,st:'absent'};
+    const ds=[];pids.forEach(id=>{(byPerson.get(id)||[]).forEach(d=>ds.push(d))});
+    if(!ds.length)return{e,st:'contact'};
+    const d=ds.sort((a,b)=>(D(b.add_time)||0)-(D(a.add_time)||0))[0];
+    return{e,st:d.isLead?'inbox':'deal',d};
+  });
+  const cnt=s=>rows.filter(r=>r.st===s).length;
+  const BAD={deal:['b-ok','Deal'],inbox:['b-bl','📥 Inbox'],contact:['b-wa','Contact sans deal'],absent:['b-ko','Introuvable']};
+  out.innerHTML=
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'+
+      ['deal','inbox','contact','absent'].map(s=>'<span class="badge '+BAD[s][0]+'">'+BAD[s][1]+' : '+cnt(s)+'</span>').join('')+
+      '<span class="badge b-gy">'+emails.length+' emails analysés</span></div>'+
+    '<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Email</th><th>Statut</th><th>Titre</th><th>Source attribuée</th><th>Étape</th><th>Créé le</th></tr></thead><tbody>'+
+    rows.map(r=>{
+      const d=r.d,src=d?orig(d):null;
+      return'<tr'+(d?' class="clk" data-id="'+d.id+'"':'')+'>'+
+        '<td style="font-family:\'JetBrains Mono\',monospace;font-size:11px">'+esc(r.e)+'</td>'+
+        '<td><span class="badge '+BAD[r.st][0]+'">'+BAD[r.st][1]+'</span></td>'+
+        '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(d?esc(d.title):'—')+'</td>'+
+        '<td>'+(d?'<span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span>':'—')+'</td>'+
+        '<td>'+(d?(d.isLead?'📥 Inbox':((STM.get(d.stage_id)||{}).n||d.stage_id)):'—')+'</td>'+
+        '<td class="num">'+(d?String(d.add_time||'').slice(0,10):'—')+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+  out.querySelectorAll('tr.clk').forEach(tr=>tr.onclick=()=>{const d=raw.find(x=>x.id==tr.dataset.id);if(d)openPanel(d)});
+}
+
 /* ════════ g. DEAL DETAIL PANEL ════════ */
 function openPanel(d){
   curDeal=d;
@@ -1032,6 +1093,7 @@ $('pgPrev').onclick=()=>{if(tPage>1){tPage--;rTbl()}};
 $('pgNext').onclick=()=>{tPage++;rTbl()};
 $('btnCSV').onclick=exportCSV;
 $('btnFgCSV').onclick=exportFgCSV;
+$('reconGo').onclick=runRecon;
 $('btnJSON').onclick=exportJSON;
 $('objIn').addEventListener('input',rObjectives);
 $('btnConnect').onclick=openModal;
