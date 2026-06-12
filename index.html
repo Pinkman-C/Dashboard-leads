@@ -298,6 +298,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
         <div class="card"><h3>Taux de conversion par source <span class="hint">WON / (WON + LOST)</span></h3><div class="chartbox tall"><canvas id="chSrcConv"></canvas></div></div>
       </div>
       <div class="card"><h3>Récapitulatif sources</h3>
+        <div id="srcDiag" style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:11px"></div>
         <table class="tbl"><thead><tr><th>Source</th><th>Leads</th><th>WON</th><th>Lost</th><th>Open</th><th>Conv %</th><th>Valeur pipeline</th><th>Âge moyen</th></tr></thead><tbody id="srcTbl"></tbody></table>
       </div>
       <div class="card"><h3>Réconciliation Google Sheet → Pipedrive</h3>
@@ -437,6 +438,7 @@ const TABS={overview:'Overview',pipeline:'Pipeline',sources:'Sources',sales:'Per
 const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : onglet Rotten +30j */
 
 /* ════════ b. STATE ════════ */
+const APP_V='v19';
 let MODE=null,KEY=null,TOKEN=null; /* MODE: 'proxy' (mot de passe équipe) | 'token' (direct) | null */
 let raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
 let DEAL_ORIG_KEY=null,DEAL_ORIG_OPTS=null;
@@ -482,34 +484,35 @@ function canonSrc(raw){ /* fusion insensible à la casse : « meta », « META �
   if(!k)return'Inconnu';
   return SRC_BRAND[k]||(k.charAt(0).toUpperCase()+k.slice(1));
 }
-function orig(d){
-  /* cascade d'attribution : org → champ du deal/lead → channel natif → repli technique */
+function origWhy(d){
+  /* cascade d'attribution : org → champ du deal/lead → personne → channel natif → repli technique */
   const oid=orgIdOf(d);
   if(oid){const org=orgMap.get(oid);
     if(org&&ORIG_FIELD_KEY&&org[ORIG_FIELD_KEY]!=null&&org[ORIG_FIELD_KEY]!==''){
       let v=org[ORIG_FIELD_KEY];
       if(ORIG_OPTS&&ORIG_OPTS[v]!==undefined)v=ORIG_OPTS[v];
-      return canonSrc(v);
+      return{src:canonSrc(v),via:'organisation'};
     }}
   if(DEAL_ORIG_KEY&&d[DEAL_ORIG_KEY]!=null&&d[DEAL_ORIG_KEY]!==''){
     let v=d[DEAL_ORIG_KEY];
     if(DEAL_ORIG_OPTS&&DEAL_ORIG_OPTS[v]!==undefined)v=DEAL_ORIG_OPTS[v];
-    return canonSrc(v);
+    return{src:canonSrc(v),via:d.isLead?'lead':'deal'};
   }
   const pid=personIdOf(d);
   if(pid){const p=personMap.get(pid);
     if(p&&PERSON_ORIG_KEY&&p[PERSON_ORIG_KEY]!=null&&p[PERSON_ORIG_KEY]!==''){
       let v=p[PERSON_ORIG_KEY];
       if(PERSON_ORIG_OPTS&&PERSON_ORIG_OPTS[v]!==undefined)v=PERSON_ORIG_OPTS[v];
-      return canonSrc(v);
+      return{src:canonSrc(v),via:'personne'};
     }}
   const c={1:'Organic',2:'Google Ads',3:'Email',4:'Meta',5:'Référent'};
-  if(d.channel)return canonSrc(c[d.channel]||String(d.channel));
-  /* origines techniques Pipedrive = org sans champ Origine : à compléter côté CRM */
+  if(d.channel)return{src:canonSrc(c[d.channel]||String(d.channel)),via:'channel'};
+  /* origines techniques Pipedrive = aucun champ Origine trouvé : à compléter côté CRM */
   const OL={manuallycreated:'Origine manquante (manuel)',api:'Origine manquante (API)',import:'Origine manquante (import)',webforms:'Origine manquante (web form)'};
-  if(d.origin)return OL[String(d.origin).toLowerCase()]||canonSrc(d.origin);
-  return'Inconnu';
+  if(d.origin)return{src:OL[String(d.origin).toLowerCase()]||canonSrc(d.origin),via:'origine technique'};
+  return{src:'Inconnu',via:'aucun signal'};
 }
+function orig(d){return origWhy(d).src}
 function srcColor(s){
   if(s==='Inconnu'||s.indexOf('Origine manquante')===0)return'#8C8C8B';
   if(!srcColorMap.has(s))srcColorMap.set(s,SRC_PAL[(srcColorMap.size-1)%SRC_PAL.length]);
@@ -847,6 +850,15 @@ function rSources(){
   mkChart('chSrcConv',{type:'bar',data:{labels:sorted.map(x=>x.s),datasets:[{data:sorted.map(x=>x.conv),backgroundColor:sorted.map(x=>srcColor(x.s)),borderRadius:5}]},options:Object.assign({indexAxis:'y'},noLeg,{scales:{x:{max:100,grid:{color:'#EFECE7'},ticks:{callback:v=>v+'%'}},y:{grid:{display:false}}}})});
   $('srcTbl').innerHTML=st.map(x=>'<tr class="clk clk-src" data-src="'+esc(x.s)+'"><td><span class="src-b" style="background:'+srcColor(x.s)+'">'+esc(x.s)+'</span></td><td class="num">'+x.n+'</td><td class="num" style="color:var(--ok)">'+x.won+'</td><td class="num" style="color:var(--ko)">'+x.lost+'</td><td class="num">'+x.open+'</td><td class="num">'+x.conv+'%</td><td class="num">'+fmtE(x.openV)+'</td><td class="num">'+x.avgAge+' j</td></tr>').join('')||'<tr><td colspan="8"><div class="empty">Aucune donnée</div></td></tr>';
   document.querySelectorAll('.clk-src').forEach(el=>el.onclick=()=>goSrc(el.dataset.src));
+  const ok=(b,t)=>'<span class="badge '+(b?'b-ok':'b-ko')+'">'+t+' : '+(b?'✓':'✗')+'</span>';
+  $('srcDiag').innerHTML=demo?'':[
+    '<span class="badge b-gy">'+APP_V+'</span>',
+    ok(ORIG_FIELD_KEY,'Champ Origine orga'),
+    ok(DEAL_ORIG_KEY,'deal/lead'),
+    ok(PERSON_ORIG_KEY,'personne'),
+    '<span class="badge b-gy">'+orgMap.size+' orgas chargées</span>',
+    '<span class="badge '+(personMap.size?'b-gy':'b-wa')+'">'+(personMap.size?personMap.size+' contacts chargés':'contacts en cours…')+'</span>'
+  ].join('');
 }
 function rSales(){
   const ds=pDeals(),open=ds.filter(d=>d.status==='open');
@@ -1077,7 +1089,7 @@ async function runRecon(){
 function openPanel(d){
   curDeal=d;
   $('pTitle').textContent=d.title||('Deal #'+d.id);
-  const st=STM.get(d.stage_id),src=orig(d);
+  const st=STM.get(d.stage_id),ow=origWhy(d),src=ow.src;
   $('pRows').innerHTML=[
     ['Société',esc(orgName(d))],
     ['Contact',esc(d.person_name||(d.person_id&&d.person_id.name)||'—')],
@@ -1086,7 +1098,7 @@ function openPanel(d){
     ['Statut','<span class="badge '+(d.status==='won'?'b-ok':d.status==='lost'?'b-ko':'b-bl')+'">'+d.status+'</span>'],
     ['Valeur','<span class="mono" style="font-weight:700">'+fmtE(+d.value||0)+'</span>'],
     ['Âge',age(d)+' j'],
-    ['Source','<span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span>'],
+    ['Source','<span class="src-b" style="background:'+srcColor(src)+'">'+esc(src)+'</span> <span style="font-size:10.5px;color:var(--bk3)">via '+esc(ow.via)+'</span>'],
     ['Créé le',String(d.add_time||'').slice(0,10)],
     ['Dernière activité',String(d.update_time||'').slice(0,10)]
   ].map(([k,v])=>'<div class="pr"><span class="k">'+k+'</span><span class="vl">'+v+'</span></div>').join('');
@@ -1131,6 +1143,7 @@ $('pgNext').onclick=()=>{tPage++;rTbl()};
 $('btnCSV').onclick=exportCSV;
 $('btnFgCSV').onclick=exportFgCSV;
 $('reconGo').onclick=runRecon;
+document.querySelector('.sb-logo .sub').textContent+=' · '+APP_V;
 $('btnJSON').onclick=exportJSON;
 $('objIn').addEventListener('input',rObjectives);
 $('btnConnect').onclick=openModal;
