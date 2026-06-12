@@ -391,11 +391,16 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
   <div class="modal">
     <h2>Connexion</h2>
     <div class="ms">Accès équipe : le token Pipedrive reste côté serveur (Vercel), seul un mot de passe partagé est requis.</div>
-    <label>Mot de passe équipe</label>
-    <input type="password" id="pw" placeholder="Mot de passe partagé" autocomplete="off">
-    <div class="msep">ou connexion directe (usage local)</div>
-    <label>API Token personnel Pipedrive</label>
-    <input type="password" id="tk" placeholder="Votre api_token personnel (mémoire uniquement)" autocomplete="off">
+    <div id="pwSec">
+      <label>Mot de passe équipe</label>
+      <input type="password" id="pw" placeholder="Mot de passe partagé" autocomplete="off">
+    </div>
+    <div id="tokSec" style="display:none">
+      <div class="msep">connexion directe</div>
+      <label>API Token personnel Pipedrive</label>
+      <input type="password" id="tk" placeholder="Votre api_token personnel (mémoire uniquement)" autocomplete="off">
+    </div>
+    <div style="margin-top:10px"><span id="tokTgl" style="font-size:11px;color:var(--bk3);cursor:pointer;text-decoration:underline">Utiliser un token API personnel</span></div>
     <label>Statut des deals</label>
     <select id="stSel">
       <option value="all_not_deleted" selected>Tous (non supprimés)</option>
@@ -996,6 +1001,10 @@ $('mGo').onclick=()=>{
   $('mErr').style.display='none';connect(false);
 };
 ['pw','tk'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')$('mGo').click()}));
+$('tokTgl').onclick=()=>{const s=$('tokSec');s.style.display=s.style.display==='none'?'block':'none'};
+if(location.protocol==='file:'){ /* en local : pas de proxy, token uniquement */
+  $('pwSec').style.display='none';$('tokTgl').style.display='none';$('tokSec').style.display='block';
+}
 $('pClose').onclick=closePanel;
 $('panelOv').onclick=closePanel;
 $('pOpen').onclick=()=>{if(curDeal)window.open('https://app.pipedrive.com/deal/'+curDeal.id,'_blank')};
