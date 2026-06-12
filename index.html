@@ -181,6 +181,8 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
 #prog .pw{height:7px;background:var(--g1);border-radius:4px;overflow:hidden}
 #prog .pb{height:100%;background:var(--or);border-radius:4px;width:0;transition:width .25s}
 #mErr{display:none;margin-top:12px;font-size:12px;color:var(--ko);font-weight:600;background:rgba(192,57,43,.08);padding:9px 12px;border-radius:var(--r2)}
+.msep{display:flex;align-items:center;gap:10px;margin-top:16px;font-size:10.5px;font-weight:600;color:var(--bk3);text-transform:uppercase;letter-spacing:.6px}
+.msep::before,.msep::after{content:'';flex:1;height:1px;background:var(--g2)}
 
 /* ===== DEAL PANEL ===== */
 .pnl-ov{position:fixed;inset:0;background:rgba(62,62,61,.25);z-index:90;opacity:0;pointer-events:none;transition:.25s}
@@ -387,10 +389,13 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
 <!-- ===== MODAL CONNEXION ===== -->
 <div class="mov" id="modal">
   <div class="modal">
-    <h2>Connexion Pipedrive</h2>
-    <div class="ms">Le token reste en mémoire uniquement (jamais stocké). Données chargées en direct depuis l'API.</div>
-    <label>API Token</label>
-    <input type="password" id="tk" placeholder="Votre api_token personnel Pipedrive" autocomplete="off">
+    <h2>Connexion</h2>
+    <div class="ms">Accès équipe : le token Pipedrive reste côté serveur (Vercel), seul un mot de passe partagé est requis.</div>
+    <label>Mot de passe équipe</label>
+    <input type="password" id="pw" placeholder="Mot de passe partagé" autocomplete="off">
+    <div class="msep">ou connexion directe (usage local)</div>
+    <label>API Token personnel Pipedrive</label>
+    <input type="password" id="tk" placeholder="Votre api_token personnel (mémoire uniquement)" autocomplete="off">
     <label>Statut des deals</label>
     <select id="stSel">
       <option value="all_not_deleted" selected>Tous (non supprimés)</option>
@@ -421,7 +426,9 @@ const TABS={overview:'Overview',pipeline:'Pipeline',sources:'Sources',sales:'Per
 const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : onglet Rotten +30j */
 
 /* ════════ b. STATE ════════ */
-let TOKEN=null,raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
+let MODE=null,KEY=null,TOKEN=null; /* MODE: 'proxy' (mot de passe équipe) | 'token' (direct) | null */
+let raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
+const live=()=>MODE!==null;
 let srcFilter='',salSel=new Set(),stageSel=null;
 let perKey='all',perFrom=null,perTo=null,cmpOn=false;
 let curTab='overview',lastSync=null,demo=false,curDeal=null;
@@ -493,13 +500,21 @@ function lastMonths(n){const out=[],now=new Date();for(let i=n-1;i>=0;i--)out.pu
 
 /* ════════ d. API PIPEDRIVE ════════ */
 async function pdG(path,params={}){
-  const u=new URL('https://api.pipedrive.com/v1'+path);
-  u.searchParams.set('api_token',TOKEN);
+  let u,opts;
+  if(MODE==='proxy'){
+    u=new URL('/api/pd',location.origin);
+    u.searchParams.set('path',path);
+    opts={headers:{'x-dash-key':KEY}};
+  }else{
+    u=new URL('https://api.pipedrive.com/v1'+path);
+    u.searchParams.set('api_token',TOKEN);
+  }
   for(const[k,v]of Object.entries(params))u.searchParams.set(k,v);
-  const r=await fetch(u);
-  if(!r.ok)throw new Error('HTTP '+r.status+' sur '+path);
-  const j=await r.json();
-  if(j.success===false)throw new Error(j.error||'Erreur API Pipedrive');
+  const r=await fetch(u,opts);
+  if(r.status===401&&MODE==='proxy'){sessionStorage.removeItem('dashKey');throw new Error('Mot de passe incorrect')}
+  const j=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error((j&&j.error)||('HTTP '+r.status+' sur '+path));
+  if(j&&j.success===false)throw new Error(j.error||'Erreur API Pipedrive');
   return j;
 }
 async function fetchAll(path,params={},onPage){
@@ -547,6 +562,11 @@ async function connect(silent){
   const status=$('stSel').value||'all_not_deleted';
   try{
     setSpin(true);
+    if(MODE==='proxy'){
+      if(!silent)prog('Vérification du mot de passe…',2);
+      await pdG('/ping');
+      sessionStorage.setItem('dashKey',KEY);
+    }
     if(!silent)prog('Recherche du champ « Origine »…',5);
     await fetchOrgFields().catch(()=>{});
     if(!silent)prog('Deals en cours de chargement…',15);
@@ -560,9 +580,11 @@ async function connect(silent){
     buildSrcOpts();rAll();
     lastSync=new Date();updSync();
     if(!silent){prog('Terminé ✔',100);setTimeout(closeModal,500)}
+    return true;
   }catch(e){
     if(!silent){$('mErr').style.display='block';$('mErr').textContent='Erreur : '+e.message;$('prog').style.display='none'}
     else console.error('Refresh échoué',e);
+    return false;
   }finally{setSpin(false)}
 }
 
@@ -570,7 +592,7 @@ async function connect(silent){
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function isoT(d){const p=x=>String(x).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':00'}
 function loadDemo(){
-  demo=true;TOKEN=null;
+  demo=true;MODE=null;KEY=null;TOKEN=null;
   const srcs=['META','Landing page','Google Ads','Référent interne','Appel entrant','Salon','Organique'];
   const kinds=['presse hydraulique','centre CNC','convoyeur','chariot élévateur','compresseur','ligne de production'];
   orgMap=new Map();ORIG_FIELD_KEY='origine';ORIG_OPTS=null;raw=[];
@@ -608,7 +630,7 @@ function prog(t,p){$('prog').style.display='block';$('progTxt').textContent=t;$(
 function setConn(on,txt){
   $('connDot').classList.toggle('live',on);
   $('connTxt').textContent=on?(txt||'Connecté · Pipedrive'):'Hors ligne';
-  $('btnRefresh').style.display=TOKEN?'inline-flex':'none';
+  $('btnRefresh').style.display=live()?'inline-flex':'none';
 }
 function setSpin(on){$('btnRefresh').classList.toggle('spin',on)}
 function updSync(){
@@ -924,7 +946,7 @@ function closePanel(){$('panel').classList.remove('on');$('panelOv').classList.r
 function stripHtml(h){const t=document.createElement('div');t.innerHTML=h||'';return t.textContent.slice(0,400)}
 async function loadDealNotes(d){
   const box=$('pNotes');
-  if(!TOKEN){box.innerHTML='<div class="empty" style="padding:14px">Notes disponibles une fois connecté à Pipedrive.</div>';return}
+  if(!live()){box.innerHTML='<div class="empty" style="padding:14px">Notes disponibles une fois connecté à Pipedrive.</div>';return}
   box.innerHTML='<div class="empty" style="padding:14px">Chargement…</div>';
   try{
     const j=await pdG('/notes',{deal_id:d.id,limit:20,sort:'add_time DESC'});
@@ -960,22 +982,36 @@ $('btnFgCSV').onclick=exportFgCSV;
 $('btnJSON').onclick=exportJSON;
 $('objIn').addEventListener('input',rObjectives);
 $('btnConnect').onclick=openModal;
-$('btnRefresh').onclick=()=>{if(TOKEN)connect(true)};
+$('btnRefresh').onclick=()=>{if(live())connect(true)};
 $('mCancel').onclick=closeModal;
 $('mDemo').onclick=loadDemo;
 $('mGo').onclick=()=>{
-  const t=$('tk').value.trim();
-  if(!t){$('mErr').style.display='block';$('mErr').textContent='Renseignez votre API token Pipedrive.';return}
-  $('mErr').style.display='none';TOKEN=t;connect(false);
+  const pw=$('pw').value.trim(),t=$('tk').value.trim();
+  const err=m=>{$('mErr').style.display='block';$('mErr').textContent=m};
+  if(pw){
+    if(location.protocol==='file:')return err('Le mode mot de passe nécessite la version en ligne (Vercel). En local, utilisez un token API.');
+    MODE='proxy';KEY=pw;TOKEN=null;
+  }else if(t){MODE='token';TOKEN=t;KEY=null}
+  else return err('Renseignez le mot de passe équipe ou un token API Pipedrive.');
+  $('mErr').style.display='none';connect(false);
 };
-$('tk').addEventListener('keydown',e=>{if(e.key==='Enter')$('mGo').click()});
+['pw','tk'].forEach(id=>$(id).addEventListener('keydown',e=>{if(e.key==='Enter')$('mGo').click()}));
 $('pClose').onclick=closePanel;
 $('panelOv').onclick=closePanel;
 $('pOpen').onclick=()=>{if(curDeal)window.open('https://app.pipedrive.com/deal/'+curDeal.id,'_blank')};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePanel();closeModal()}});
 setInterval(updSync,30000);
 
-buildSales();buildSrcOpts();rAll();openModal();
+buildSales();buildSrcOpts();rAll();
+(async()=>{ /* reconnexion auto si mot de passe en session */
+  const saved=location.protocol!=='file:'&&sessionStorage.getItem('dashKey');
+  if(saved){
+    MODE='proxy';KEY=saved;
+    if(await connect(true))return;
+    MODE=null;KEY=null;
+  }
+  openModal();
+})();
 </script>
 </body>
 </html>

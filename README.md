@@ -2,13 +2,25 @@
 
 Dashboard self-contained (un seul fichier `index.html`, zéro build) branché en direct sur l'API Pipedrive, pour le pilotage commercial d'Auctelia.
 
-## Utilisation
+## Accès
 
-1. Ouvrir `index.html` dans un navigateur (double-clic suffit), ou servir le repo via GitHub Pages.
-2. Dans la modal de connexion, coller votre **API token Pipedrive** (Paramètres → Personal preferences → API).
-3. Le token reste **en mémoire uniquement** — jamais écrit dans localStorage ni envoyé ailleurs que vers `api.pipedrive.com`.
+Deux modes de connexion dans la modal :
 
-Un **mode démo** (données fictives reproductibles) est disponible dans la modal pour explorer le dashboard sans token.
+1. **Mot de passe équipe (recommandé, version en ligne)** — le dashboard appelle une fonction serverless Vercel (`api/pd.js`) qui proxifie l'API Pipedrive en lecture seule. Le token Pipedrive ne quitte jamais le serveur. Le mot de passe est conservé en `sessionStorage` (reconnexion auto dans l'onglet).
+2. **Token API personnel (usage local)** — ouvrir `index.html` en double-clic et coller son `api_token` Pipedrive. Le token reste **en mémoire uniquement**.
+
+Un **mode démo** (données fictives reproductibles) est disponible dans la modal pour explorer sans accès.
+
+### Configuration Vercel (mode équipe)
+
+Dans le projet Vercel → Settings → Environment Variables, ajouter puis redéployer :
+
+| Variable | Valeur |
+| --- | --- |
+| `PIPEDRIVE_API_TOKEN` | Token API du compte Pipedrive (Paramètres → Personal preferences → API) |
+| `DASHBOARD_PASSWORD` | Mot de passe partagé de l'équipe |
+
+Le proxy n'autorise que les endpoints en lecture utilisés par le dashboard (`/deals`, `/organizations`, `/organizationFields`, `/notes`) et compare le mot de passe en temps constant.
 
 ## Nouveautés v18
 
