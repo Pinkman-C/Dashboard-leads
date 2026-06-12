@@ -439,6 +439,7 @@ const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : ongle
 /* ════════ b. STATE ════════ */
 let MODE=null,KEY=null,TOKEN=null; /* MODE: 'proxy' (mot de passe équipe) | 'token' (direct) | null */
 let raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
+let DEAL_ORIG_KEY=null,DEAL_ORIG_OPTS=null;
 const live=()=>MODE!==null;
 let srcFilter='',salSel=new Set(),stageSel=null;
 let perKey='all',perFrom=null,perTo=null,cmpOn=false;
@@ -481,6 +482,7 @@ function canonSrc(raw){ /* fusion insensible à la casse : « meta », « META �
   return SRC_BRAND[k]||(k.charAt(0).toUpperCase()+k.slice(1));
 }
 function orig(d){
+  /* cascade d'attribution : org → champ du deal/lead → channel natif → repli technique */
   const oid=orgIdOf(d);
   if(oid){const org=orgMap.get(oid);
     if(org&&ORIG_FIELD_KEY&&org[ORIG_FIELD_KEY]!=null&&org[ORIG_FIELD_KEY]!==''){
@@ -488,6 +490,11 @@ function orig(d){
       if(ORIG_OPTS&&ORIG_OPTS[v]!==undefined)v=ORIG_OPTS[v];
       return canonSrc(v);
     }}
+  if(DEAL_ORIG_KEY&&d[DEAL_ORIG_KEY]!=null&&d[DEAL_ORIG_KEY]!==''){
+    let v=d[DEAL_ORIG_KEY];
+    if(DEAL_ORIG_OPTS&&DEAL_ORIG_OPTS[v]!==undefined)v=DEAL_ORIG_OPTS[v];
+    return canonSrc(v);
+  }
   const c={1:'Organic',2:'Google Ads',3:'Email',4:'Meta',5:'Référent'};
   if(d.channel)return canonSrc(c[d.channel]||String(d.channel));
   /* origines techniques Pipedrive = org sans champ Origine : à compléter côté CRM */
@@ -567,7 +574,7 @@ async function fetchLeads(){ /* Leads Inbox Pipedrive (non convertis en deal) */
   return out;
 }
 function leadToDeal(l){ /* un lead inbox = pseudo-deal à l'étape Lead */
-  return{
+  const out={
     id:'L'+l.id,leadId:l.id,isLead:true,
     title:l.title||'Lead sans titre',
     org_id:l.organization_id?{value:l.organization_id}:null,
@@ -576,16 +583,27 @@ function leadToDeal(l){ /* un lead inbox = pseudo-deal à l'étape Lead */
     pipeline_id:PIPELINE_ID,stage_id:54,status:'open',
     value:(l.value&&l.value.amount)||0,
     add_time:l.add_time,update_time:l.update_time,
-    stage_change_time:null,won_time:null,lost_time:null
+    stage_change_time:null,won_time:null,lost_time:null,
+    channel:l.channel||null,origin:l.origin||l.source_name||null
   };
+  if(DEAL_ORIG_KEY&&l[DEAL_ORIG_KEY]!=null)out[DEAL_ORIG_KEY]=l[DEAL_ORIG_KEY];
+  return out;
+}
+function findOrigField(fields){
+  return fields.find(x=>String(x.name||'').trim().toLowerCase()==='origine')
+       ||fields.find(x=>String(x.name||'').toLowerCase().includes('origine'))
+       ||fields.find(x=>x.key==='origine');
 }
 async function fetchOrgFields(){
-  const fields=await fetchAll('/organizationFields');
-  const f=fields.find(x=>String(x.name||'').trim().toLowerCase()==='origine')
-        ||fields.find(x=>String(x.name||'').toLowerCase().includes('origine'))
-        ||fields.find(x=>x.key==='origine');
+  const f=findOrigField(await fetchAll('/organizationFields'));
   if(f){ORIG_FIELD_KEY=f.key;
     if(Array.isArray(f.options)&&f.options.length){ORIG_OPTS={};f.options.forEach(o=>ORIG_OPTS[o.id]=o.label)}
+  }
+}
+async function fetchDealFields(){ /* les leads héritent des champs custom des deals */
+  const f=findOrigField(await fetchAll('/dealFields'));
+  if(f){DEAL_ORIG_KEY=f.key;
+    if(Array.isArray(f.options)&&f.options.length){DEAL_ORIG_OPTS={};f.options.forEach(o=>DEAL_ORIG_OPTS[o.id]=o.label)}
   }
 }
 async function fetchOrganisations(ids,onProg){
@@ -618,7 +636,7 @@ async function connect(silent){
       sessionStorage.setItem('dashKey',KEY);
     }
     if(!silent)prog('Recherche du champ « Origine »…',5);
-    await Promise.all([fetchOrgFields().catch(()=>{}),fetchUsers()]);
+    await Promise.all([fetchOrgFields().catch(()=>{}),fetchDealFields().catch(()=>{}),fetchUsers()]);
     if(!silent)prog('Deals en cours de chargement…',12);
     const deals=await fetchD(status,n=>{if(!silent)prog('Deals chargés… ('+n+')',12+Math.min(35,n/50))});
     if(!silent)prog('Leads inbox…',50);
