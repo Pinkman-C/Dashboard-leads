@@ -301,6 +301,11 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--bk);-webkit
         <div id="srcDiag" style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:11px"></div>
         <table class="tbl"><thead><tr><th>Source</th><th>Leads</th><th>WON</th><th>Lost</th><th>Open</th><th>Conv %</th><th>Valeur pipeline</th><th>Âge moyen</th></tr></thead><tbody id="srcTbl"></tbody></table>
       </div>
+      <div class="card"><h3>Contacts par origine <span class="hint">indépendant des affaires — détecte les contacts sans deal ni lead</span></h3>
+        <div id="pplDiag" style="font-size:12px;color:var(--bk2);margin-bottom:9px"></div>
+        <table class="tbl"><thead><tr><th>Origine (contact)</th><th>Contacts créés</th><th>Avec deal/lead</th><th>Orphelins</th></tr></thead><tbody id="pplTbl"></tbody></table>
+        <div id="pplOrph" style="margin-top:12px"></div>
+      </div>
       <div class="card"><h3>Réconciliation Google Sheet → Pipedrive</h3>
         <div style="font-size:12px;color:var(--bk2);margin-bottom:9px">Colle des lignes de ton sheet (ou une liste d'emails) : pour chaque contact, je vérifie s'il existe dans Pipedrive — deal, lead inbox ou introuvable — et quelle source lui a été attribuée.</div>
         <textarea id="reconIn" rows="6" placeholder="Colle ici les lignes du sheet…" style="width:100%;font-family:'JetBrains Mono',monospace;font-size:11.5px;padding:10px 12px;border:1.5px solid var(--g2);border-radius:8px;outline:none;resize:vertical"></textarea>
@@ -438,7 +443,7 @@ const TABS={overview:'Overview',pipeline:'Pipeline',sources:'Sources',sales:'Per
 const ALERT_CAP=30; /* retard max (j) affiché dans Alertes — au-delà : onglet Rotten +30j */
 
 /* ════════ b. STATE ════════ */
-const APP_V='v20';
+const APP_V='v21';
 let MODE=null,KEY=null,TOKEN=null; /* MODE: 'proxy' (mot de passe équipe) | 'token' (direct) | null */
 let raw=[],orgMap=new Map(),ORIG_FIELD_KEY=null,ORIG_OPTS=null;
 let DEAL_ORIG_KEY=null,DEAL_ORIG_OPTS=null;
@@ -861,6 +866,52 @@ function rSources(){
     '<span class="badge b-gy">'+orgMap.size+' orgas chargées</span>',
     '<span class="badge '+(personMap.size?'b-gy':'b-wa')+'">'+(personMap.size?personMap.size+' contacts chargés':'contacts en cours…')+'</span>'
   ].join('');
+  rPersonSrc();
+}
+function pEmail(p){if(Array.isArray(p.email)){const e=p.email.find(x=>x&&x.value);return e?e.value:'—'}return p.primary_email||String(p.email||'—')}
+function pOrgId(p){const o=p.org_id;if(!o)return null;return typeof o==='object'?(o.value!=null?o.value:o.id):o}
+function personSrcOf(p){
+  if(PERSON_ORIG_KEY&&p[PERSON_ORIG_KEY]!=null&&p[PERSON_ORIG_KEY]!==''){
+    let v=p[PERSON_ORIG_KEY];
+    if(PERSON_ORIG_OPTS&&PERSON_ORIG_OPTS[v]!==undefined)v=PERSON_ORIG_OPTS[v];
+    return canonSrc(v);
+  }
+  return null;
+}
+function rPersonSrc(){ /* sources comptées au niveau contact : voit les contacts dont personne n'a créé l'affaire */
+  const tbl=$('pplTbl'),dg=$('pplDiag'),orphBox=$('pplOrph');
+  if(!tbl)return;
+  if(demo||!personMap.size){
+    dg.textContent=demo?'Disponible en mode connecté.':'Contacts en cours de chargement…';
+    tbl.innerHTML='';orphBox.innerHTML='';return;
+  }
+  const covered=new Set(),coveredOrg=new Set();
+  raw.forEach(d=>{
+    const pid=personIdOf(d);if(pid!=null)covered.add(pid);
+    const oid=orgIdOf(d);if(oid!=null)coveredOrg.add(oid);
+  });
+  const groups=new Map();
+  personMap.forEach(p=>{
+    if((perFrom||perTo)&&!inRange(p.add_time,perFrom,perTo))return;
+    const s=personSrcOf(p)||'Sans origine';
+    if(!groups.has(s))groups.set(s,{n:0,cov:0,orph:[]});
+    const g=groups.get(s);g.n++;
+    const oid=pOrgId(p);
+    if(covered.has(p.id)||(oid!=null&&coveredOrg.has(oid)))g.cov++;else g.orph.push(p);
+  });
+  const rows=[...groups.entries()].sort((a,b)=>b[1].n-a[1].n);
+  dg.textContent='Comptage par date de création du contact sur la période choisie. Orphelin = aucun deal ni lead rattaché au contact ou à sa société. Clique une ligne pour lister les orphelins.';
+  tbl.innerHTML=rows.map(([s,g])=>'<tr class="clk ppl-row" data-src="'+esc(s)+'"><td><span class="src-b" style="background:'+srcColor(s)+'">'+esc(s)+'</span></td><td class="num">'+g.n+'</td><td class="num">'+g.cov+'</td><td class="num" style="font-weight:700;color:'+(g.orph.length?'var(--ko)':'var(--ok)')+'">'+g.orph.length+'</td></tr>').join('')
+    ||'<tr><td colspan="4"><div class="empty">Aucun contact créé sur la période</div></td></tr>';
+  tbl.querySelectorAll('.ppl-row').forEach(tr=>tr.onclick=()=>{
+    const g=groups.get(tr.dataset.src);if(!g)return;
+    orphBox.innerHTML=g.orph.length?
+      '<h4 style="font-size:12px;margin-bottom:8px">Contacts « '+esc(tr.dataset.src)+' » sans deal ni lead ('+g.orph.length+')</h4>'+
+      '<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Contact</th><th>Email</th><th>Créé le</th><th></th></tr></thead><tbody>'+
+      g.orph.sort((a,b)=>String(b.add_time||'').localeCompare(String(a.add_time||''))).map(p=>'<tr><td>'+esc(p.name||'—')+'</td><td style="font-family:\'JetBrains Mono\',monospace;font-size:11px">'+esc(pEmail(p))+'</td><td class="num">'+String(p.add_time||'').slice(0,10)+'</td><td><a href="https://app.pipedrive.com/person/'+p.id+'" target="_blank" style="color:var(--or);font-weight:600;text-decoration:none">↗ Pipedrive</a></td></tr>').join('')+
+      '</tbody></table></div>'
+      :'<div class="empty">Aucun orphelin pour « '+esc(tr.dataset.src)+' » — toutes les affaires ont été créées.</div>';
+  });
 }
 function rSales(){
   const ds=pDeals(),open=ds.filter(d=>d.status==='open');
